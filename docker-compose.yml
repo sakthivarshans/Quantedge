@@ -1,0 +1,101 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: quantedge
+      POSTGRES_PASSWORD: quantedge
+      POSTGRES_DB: quantedge
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantedge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://quantedge:quantedge@db:5432/quantedge
+      REDIS_URL: redis://redis:6379/0
+      # Set to "true" to force synthetic market data (useful for demos / no data-vendor access)
+      USE_SYNTHETIC_DATA: "false"
+      JWT_SECRET_KEY: "change-me-to-a-long-random-string-in-production"
+      CORS_ORIGINS: "*"
+      LOG_LEVEL: "INFO"
+      ENVIRONMENT: "production"
+      # SENTRY_DSN: ""   # uncomment and set to enable error monitoring
+      # DISABLE_RATE_LIMIT: "false"  # only ever set true for local load-testing
+      # GOOGLE_CLIENT_ID: ""  # uncomment and set to enable "Sign in with Google"
+      # ALPACA_API_KEY: ""    # uncomment and set for real market data (recommended, free)
+      # ALPACA_SECRET_KEY: ""
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  celery-worker:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://quantedge:quantedge@db:5432/quantedge
+      REDIS_URL: redis://redis:6379/0
+      USE_SYNTHETIC_DATA: "false"
+      LOG_LEVEL: "INFO"
+      # ALPACA_API_KEY: ""    # same value as the backend service
+      # ALPACA_SECRET_KEY: ""
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-beat:
+    build: ./backend
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://quantedge:quantedge@db:5432/quantedge
+      REDIS_URL: redis://redis:6379/0
+      USE_SYNTHETIC_DATA: "false"
+      SCAN_INTERVAL_SECONDS: "30"
+      LOG_LEVEL: "INFO"
+      # ALPACA_API_KEY: ""    # same value as the backend service
+      # ALPACA_SECRET_KEY: ""
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  pgdata:
